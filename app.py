@@ -33,7 +33,7 @@ TICKERS = {
 }
 
 st.set_page_config(page_title="주식 모의투자 백테스트", layout="wide")
-st.title("📉 BB 하단 터치 분할 매수 모의투자 (손절 방어 포함)")
+st.title("📉 BB 하단 터치 분할 매수 (타임 스탑 방어)")
 
 with st.sidebar:
     st.header("⚙️ 백테스트 설정")
@@ -60,12 +60,16 @@ with st.sidebar:
     )
     
     st.markdown("---")
+    
+    # 1번 방법: 타임 스탑 기간 설정 패널 추가
+    max_hold_candles = st.number_input("최대 보유 캔들 수 (타임 스탑)", value=10, step=1, help="이 캔들 수 이내에 익절하지 못하면 현재가에 전량 매도합니다.")
+    
     st.markdown(f"""
     **초기 자본금: 10,000,000원**
     * 1차 터치: 잔고 30% 매수 ➔ **+3% 익절**
     * 2차 터치: 잔고 50% 매수 ➔ **+1% 익절**
     * 3차 터치: 잔고 50% 매수 ➔ **0% 본전 탈출**
-    * 🚨 **최종 손절매:** 3차 매수 후 평단가 대비 **-3% 하락 시 강제 청산**
+    * ⏱️ **타임 스탑:** 마지막 매수 후 **{max_hold_candles}개 캔들 경과 시 강제 청산**
     """)
     
     run_btn = st.button("🚀 데이터 갱신 및 시뮬레이션", use_container_width=True)
@@ -82,7 +86,7 @@ if run_btn:
         else:
             with st.spinner(f"'{ticker}' 데이터를 가져오는 중..."):
                 # ==========================================
-                # 1. 시간 봉 데이터 수집
+                # 1. 시간 봉 데이터 수집 (우회 로직 포함)
                 # ==========================================
                 df_intraday = pd.DataFrame()
                 
@@ -124,7 +128,7 @@ if run_btn:
                         st.error("데이터 개수가 너무 적습니다. 조회 기간을 넓혀주세요.")
                     else:
                         # ==========================================
-                        # 2. 모의투자 시뮬레이션
+                        # 2. 모의투자 시뮬레이션 (타임 스탑 로직)
                         # ==========================================
                         INITIAL_CAPITAL = 10000000
                         cash = INITIAL_CAPITAL
@@ -134,6 +138,7 @@ if run_btn:
                         bb_step = 0
                         last_buy_date = None
                         first_buy_date = None
+                        candles_held = 0 # 보유 기간(캔들 수) 카운터
                         
                         trade_log = []
                         buy_markers = []
@@ -147,6 +152,10 @@ if run_btn:
                             
                             is_bb_touch = low <= bb_lower
                             
+                            # 보유 중일 때마다 캔들 카운트 1 증가
+                            if shares > 0:
+                                candles_held += 1
+                                
                             # 신규 진입 (포지션 없음)
                             if shares == 0:
                                 if is_bb_touch:
@@ -160,6 +169,7 @@ if run_btn:
                                     
                                     first_buy_date = date
                                     last_buy_date = date.split()[0]
+                                    candles_held = 1 # 첫 매수 시 카운터 시작
                                     buy_markers.append({'date': date, 'price': low, 'reason': "BB 1차 매수 (잔고 30%)"})
                             
                             # 보유 중 (추가 매수 또는 청산)
@@ -173,20 +183,17 @@ if run_btn:
                                 
                                 target_price = avg_price * (1 + target_pct)
                                 
-                                # [새로 추가된 로직] 3차 매수까지 완료된 상태에서 평단가 대비 -3% 이상 하락 시 강제 손절
-                                stop_loss_price = avg_price * (1 - 0.03)
+                                # [새로 추가된 로직] 타임 스탑: 설정된 캔들 수 도과 시 무조건 청산
+                                if candles_held >= max_hold_candles:
+                                    is_sold = True
+                                    sell_reason = f"타임 스탑 강제청산 (캔들 {max_hold_candles}개 초과)"
                                 
-                                # 익절 판별
-                                if close >= target_price:
+                                # 기존 익절 판별
+                                elif close >= target_price:
                                     is_sold = True
                                     sell_reason = f"BB {bb_step}차 목표 달성 (+{target_pct*100:.0f}%)"
                                     
-                                # 손절 판별 (3차 진입 완료 상태일 때만 발동)
-                                elif bb_step == 3 and close <= stop_loss_price:
-                                    is_sold = True
-                                    sell_reason = f"최종 손절매 방어 (-3% 이탈)"
-                                    
-                                # 익절 실패 및 추가 하락 시 물타기 진입
+                                # 익절 실패 및 추가 하락 시 물타기 진입 (타임 스탑과 익절 조건이 모두 아닐 때)
                                 elif is_bb_touch and date.split()[0] != last_buy_date and bb_step < 3:
                                     bb_step += 1
                                     invest_amount = cash * 0.50
@@ -198,6 +205,7 @@ if run_btn:
                                     avg_price = total_cost / shares
                                     
                                     last_buy_date = date.split()[0]
+                                    candles_held = 1 # 추가 매수 시 타임 스탑 카운터 초기화 (새로운 기회 부여)
                                     buy_markers.append({'date': date, 'price': low, 'reason': f"BB {bb_step}차 추가매수 (잔고 50%)"})
                                 
                                 # 매도 실행
@@ -219,6 +227,7 @@ if run_btn:
                                     shares = 0.0
                                     avg_price = 0.0
                                     bb_step = 0
+                                    candles_held = 0
 
                         final_equity = cash + (shares * float(df_intraday['Close'].iloc[-1]))
                         total_cumulative_return = ((final_equity / INITIAL_CAPITAL) - 1) * 100
@@ -246,7 +255,6 @@ if run_btn:
                         st.divider()
                         
                         if not log_df.empty:
-                            # 매도 사유별 통계 추가
                             col_tbl1, col_tbl2 = st.columns([1, 2])
                             with col_tbl1:
                                 st.subheader("📝 매도 사유 분포")
