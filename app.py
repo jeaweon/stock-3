@@ -61,7 +61,6 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # 1번 방법: 타임 스탑 기간 설정 패널 추가
     max_hold_candles = st.number_input("최대 보유 캔들 수 (타임 스탑)", value=10, step=1, help="이 캔들 수 이내에 익절하지 못하면 현재가에 전량 매도합니다.")
     
     st.markdown(f"""
@@ -85,9 +84,7 @@ if run_btn:
             st.error("90분 봉은 최대 60일까지만 조회 가능합니다. 달력에서 기간을 줄여주세요.")
         else:
             with st.spinner(f"'{ticker}' 데이터를 가져오는 중..."):
-                # ==========================================
                 # 1. 시간 봉 데이터 수집 (우회 로직 포함)
-                # ==========================================
                 df_intraday = pd.DataFrame()
                 
                 if selected_tf == "90m":
@@ -127,9 +124,7 @@ if run_btn:
                     if len(df_intraday) < 25:
                         st.error("데이터 개수가 너무 적습니다. 조회 기간을 넓혀주세요.")
                     else:
-                        # ==========================================
                         # 2. 모의투자 시뮬레이션 (타임 스탑 로직)
-                        # ==========================================
                         INITIAL_CAPITAL = 10000000
                         cash = INITIAL_CAPITAL
                         shares = 0.0
@@ -152,11 +147,9 @@ if run_btn:
                             
                             is_bb_touch = low <= bb_lower
                             
-                            # 보유 중일 때마다 캔들 카운트 1 증가
                             if shares > 0:
                                 candles_held += 1
                                 
-                            # 신규 진입 (포지션 없음)
                             if shares == 0:
                                 if is_bb_touch:
                                     bb_step = 1
@@ -169,10 +162,9 @@ if run_btn:
                                     
                                     first_buy_date = date
                                     last_buy_date = date.split()[0]
-                                    candles_held = 1 # 첫 매수 시 카운터 시작
+                                    candles_held = 1
                                     buy_markers.append({'date': date, 'price': low, 'reason': "BB 1차 매수 (잔고 30%)"})
                             
-                            # 보유 중 (추가 매수 또는 청산)
                             elif shares > 0:
                                 is_sold = False
                                 sell_reason = ""
@@ -183,17 +175,14 @@ if run_btn:
                                 
                                 target_price = avg_price * (1 + target_pct)
                                 
-                                # [새로 추가된 로직] 타임 스탑: 설정된 캔들 수 도과 시 무조건 청산
                                 if candles_held >= max_hold_candles:
                                     is_sold = True
                                     sell_reason = f"타임 스탑 강제청산 (캔들 {max_hold_candles}개 초과)"
                                 
-                                # 기존 익절 판별
                                 elif close >= target_price:
                                     is_sold = True
                                     sell_reason = f"BB {bb_step}차 목표 달성 (+{target_pct*100:.0f}%)"
                                     
-                                # 익절 실패 및 추가 하락 시 물타기 진입 (타임 스탑과 익절 조건이 모두 아닐 때)
                                 elif is_bb_touch and date.split()[0] != last_buy_date and bb_step < 3:
                                     bb_step += 1
                                     invest_amount = cash * 0.50
@@ -205,10 +194,9 @@ if run_btn:
                                     avg_price = total_cost / shares
                                     
                                     last_buy_date = date.split()[0]
-                                    candles_held = 1 # 추가 매수 시 타임 스탑 카운터 초기화 (새로운 기회 부여)
+                                    candles_held = 1 
                                     buy_markers.append({'date': date, 'price': low, 'reason': f"BB {bb_step}차 추가매수 (잔고 50%)"})
                                 
-                                # 매도 실행
                                 if is_sold:
                                     sell_amount = shares * close
                                     cash += sell_amount
@@ -232,9 +220,7 @@ if run_btn:
                         final_equity = cash + (shares * float(df_intraday['Close'].iloc[-1]))
                         total_cumulative_return = ((final_equity / INITIAL_CAPITAL) - 1) * 100
 
-                        # ==========================================
                         # 3. 결과 UI 대시보드
-                        # ==========================================
                         log_df = pd.DataFrame(trade_log)
                         
                         st.subheader(f"🎯 [{ticker}] 모의투자 결과 요약")
