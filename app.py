@@ -33,12 +33,11 @@ TICKERS = {
 }
 
 st.set_page_config(page_title="주식 모의투자 백테스트", layout="wide")
-st.title("📉 BB 하단 터치 분할 매수 모의투자")
+st.title("📉 BB 하단 터치 분할 매수 모의투자 (손절 방어 포함)")
 
 with st.sidebar:
     st.header("⚙️ 백테스트 설정")
     
-    # 지정된 종목만 선택할 수 있도록 드롭다운 변경
     selected_ticker_name = st.selectbox("관심 종목 선택", list(TICKERS.keys()))
     ticker = TICKERS[selected_ticker_name]
     
@@ -61,7 +60,13 @@ with st.sidebar:
     )
     
     st.markdown("---")
-    st.markdown(f"**초기 자본금: 10,000,000원**\n* 1차 터치: 잔고 30% 매수 (+3% 익절)\n* 2차 터치: 잔고 50% 매수 (+1% 익절)\n* 3차 터치: 잔고 50% 매수 (본전 탈출)")
+    st.markdown(f"""
+    **초기 자본금: 10,000,000원**
+    * 1차 터치: 잔고 30% 매수 ➔ **+3% 익절**
+    * 2차 터치: 잔고 50% 매수 ➔ **+1% 익절**
+    * 3차 터치: 잔고 50% 매수 ➔ **0% 본전 탈출**
+    * 🚨 **최종 손절매:** 3차 매수 후 평단가 대비 **-3% 하락 시 강제 청산**
+    """)
     
     run_btn = st.button("🚀 데이터 갱신 및 시뮬레이션", use_container_width=True)
 
@@ -77,7 +82,7 @@ if run_btn:
         else:
             with st.spinner(f"'{ticker}' 데이터를 가져오는 중..."):
                 # ==========================================
-                # 1. 시간 봉 데이터 수집 (우회 로직 포함)
+                # 1. 시간 봉 데이터 수집
                 # ==========================================
                 df_intraday = pd.DataFrame()
                 
@@ -110,10 +115,9 @@ if run_btn:
                 else:
                     df_intraday.dropna(inplace=True)
                     
-                    # 지표 계산
                     bb = ta.volatility.BollingerBands(close=df_intraday['Close'], window=20, window_dev=2)
                     df_intraday['BB_Lower'] = bb.bollinger_lband()
-                    df_intraday['MA20'] = df_intraday['Close'].rolling(window=20).mean() # 차트 시각화용
+                    df_intraday['MA20'] = df_intraday['Close'].rolling(window=20).mean()
                     df_intraday.dropna(inplace=True)
                     
                     if len(df_intraday) < 25:
@@ -158,27 +162,34 @@ if run_btn:
                                     last_buy_date = date.split()[0]
                                     buy_markers.append({'date': date, 'price': low, 'reason': "BB 1차 매수 (잔고 30%)"})
                             
-                            # 보유 중 (추가 매수 또는 익절)
+                            # 보유 중 (추가 매수 또는 청산)
                             elif shares > 0:
                                 is_sold = False
                                 sell_reason = ""
                                 
-                                # 목표 수익률 설정
                                 if bb_step == 1: target_pct = 0.03
                                 elif bb_step == 2: target_pct = 0.01
                                 else: target_pct = 0.0
                                 
                                 target_price = avg_price * (1 + target_pct)
                                 
+                                # [새로 추가된 로직] 3차 매수까지 완료된 상태에서 평단가 대비 -3% 이상 하락 시 강제 손절
+                                stop_loss_price = avg_price * (1 - 0.03)
+                                
                                 # 익절 판별
                                 if close >= target_price:
                                     is_sold = True
                                     sell_reason = f"BB {bb_step}차 목표 달성 (+{target_pct*100:.0f}%)"
                                     
-                                # 익절 실패 및 추가 하락 시 (당일 중복 매수 방지)
+                                # 손절 판별 (3차 진입 완료 상태일 때만 발동)
+                                elif bb_step == 3 and close <= stop_loss_price:
+                                    is_sold = True
+                                    sell_reason = f"최종 손절매 방어 (-3% 이탈)"
+                                    
+                                # 익절 실패 및 추가 하락 시 물타기 진입
                                 elif is_bb_touch and date.split()[0] != last_buy_date and bb_step < 3:
                                     bb_step += 1
-                                    invest_amount = cash * 0.50 # 남은 잔고의 50%
+                                    invest_amount = cash * 0.50
                                     bought_shares = invest_amount / close
                                     
                                     total_cost = (shares * avg_price) + invest_amount
@@ -209,7 +220,6 @@ if run_btn:
                                     avg_price = 0.0
                                     bb_step = 0
 
-                        # 백테스트 종료 시점 잔고 평가
                         final_equity = cash + (shares * float(df_intraday['Close'].iloc[-1]))
                         total_cumulative_return = ((final_equity / INITIAL_CAPITAL) - 1) * 100
 
@@ -236,8 +246,17 @@ if run_btn:
                         st.divider()
                         
                         if not log_df.empty:
-                            st.subheader("📝 상세 매매 일지")
-                            st.dataframe(log_df, use_container_width=True)
+                            # 매도 사유별 통계 추가
+                            col_tbl1, col_tbl2 = st.columns([1, 2])
+                            with col_tbl1:
+                                st.subheader("📝 매도 사유 분포")
+                                sell_stats = log_df['매도사유'].value_counts().reset_index()
+                                sell_stats.columns = ['매도 사유', '발생 횟수']
+                                st.dataframe(sell_stats, use_container_width=True)
+                            
+                            with col_tbl2:
+                                st.subheader("📝 상세 매매 일지")
+                                st.dataframe(log_df, use_container_width=True)
                             
                         st.subheader(f"📊 매수/매도 타점 차트 ({selected_tf} 주가 + BB 하단)")
                         
